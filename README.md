@@ -6,7 +6,7 @@
 
 - Регистрация запросов пользователей с возможностью категоризации
 - Автоматические ответы на частые вопросы
-- Перенаправление запросов кураторам
+- Перенаправление запросов кураторам с ID 2103397
 - Автоматические уведомления, если ответ не предоставлен в течение заданного времени
 - Возможность интеграции с внешними системами
 
@@ -23,8 +23,8 @@
 
 1. Клонируйте репозиторий:
 ```bash
-git clone https://github.com/yourusername/knvbot.git
-cd knvbot
+git clone https://github.com/Ashzegna/knvbotcurator.git
+cd knvbotcurator
 ```
 
 2. Установите зависимости:
@@ -37,7 +37,6 @@ npm install
 BOT_TOKEN=your_bot_token_here
 ADMIN_CHAT_ID=your_admin_chat_id_here
 CURATOR_RESPONSE_TIMEOUT=15
-KITIK_API_URL=https://api.kitik.example.com
 ```
 
 4. Запустите бота в режиме разработки:
@@ -65,7 +64,6 @@ vercel
    - `BOT_TOKEN`
    - `ADMIN_CHAT_ID`
    - `CURATOR_RESPONSE_TIMEOUT`
-   - `KITIK_API_URL`
 
 6. Настройте webhook для вашего бота:
 ```
