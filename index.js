@@ -486,13 +486,28 @@ if (process.env.NODE_ENV === 'production') {
   // Для Vercel и других serverless платформ используем webhook
   module.exports = async (req, res) => {
     try {
+      // Заглушка для GET-запросов (проверка доступности)
+      if (req.method === 'GET') {
+        return res.status(200).send('Telegram Bot is running!');
+      }
+      
+      // Проверка, существует ли тело запроса
+      if (!req.body) {
+        console.log('Тело запроса отсутствует');
+        return res.status(200).send('OK but no request body');
+      }
+      
+      console.log('Получен запрос webhook');
+      
       // Обрабатываем обновление от Telegram
       await bot.handleUpdate(req.body);
+      
       // Отвечаем с успешным статусом
-      res.status(200).send('OK');
+      console.log('Запрос успешно обработан');
+      return res.status(200).send('OK');
     } catch (error) {
       console.error('Ошибка при обработке webhook:', error);
-      res.status(500).send('Internal Server Error');
+      return res.status(500).send('Internal Server Error: ' + error.message);
     }
   };
 } else {

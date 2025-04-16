@@ -3,6 +3,7 @@ node_modules/
 
 # Переменные окружения
 .env
+.env.example
 
 # Логи
 logs
