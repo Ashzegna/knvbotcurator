@@ -198,177 +198,69 @@ bot.hears('📞 Связаться с командой', async (ctx) => {
   }
 });
 
-// Объединенный обработчик текстовых сообщений
+// Обработка текстовых сообщений
 bot.on('text', async (ctx) => {
   try {
-    // Проверяем, является ли отправитель администратором
-    const adminChatId = process.env.ADMIN_CHAT_ID;
-    const isAdmin = ctx.from.id.toString() === adminChatId.toString();
+    const userState = cache.get(`user_${ctx.from.id}_state`);
     
-    // Проверяем состояние администратора
-    const adminId = ctx.from.id;
-    const adminState = cache.get(`admin_${adminId}_state`);
-    
-    console.log(`Получено сообщение от ${ctx.from.id}, isAdmin: ${isAdmin}, adminState: ${adminState}`);
-    
-    // Если это администратор в режиме ответа на вопрос
-    if (isAdmin && adminState === 'waiting_reply') {
-      try {
-        const requestId = cache.get(`admin_${adminId}_current_request`);
-        
-        if (!requestId) {
-          await ctx.reply('Ошибка: запрос не найден. Пожалуйста, начните сначала.');
-          cache.set(`admin_${adminId}_state`, null);
-          return;
-        }
-        
-        const requestData = cache.get(`request_${requestId}`);
-        
-        if (!requestData) {
-          await ctx.reply('Ошибка: запрос не найден или устарел. Пожалуйста, начните сначала.');
-          cache.set(`admin_${adminId}_state`, null);
-          return;
-        }
-        
-        const replyText = ctx.message.text;
-        
-        console.log(`Отправка ответа пользователю ${requestData.userId} на запрос ${requestId}`);
-        
-        // Отправляем ответ пользователю
-        const sentMessage = await bot.telegram.sendMessage(
-          requestData.userId,
-          `Ответ на ваш вопрос:\n\n${replyText}`
-        );
-        
-        console.log(`Ответ успешно отправлен пользователю:`, sentMessage);
-        
-        // Обновляем статус запроса
-        requestData.status = REQUEST_STATUS.ANSWERED;
-        requestData.answerText = replyText;
-        requestData.answeredBy = ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
-        requestData.answeredAt = Date.now();
-        
-        cache.set(`request_${requestId}`, requestData);
-        
-        // Сбрасываем состояние администратора
-        cache.set(`admin_${adminId}_state`, null);
-        cache.set(`admin_${adminId}_current_request`, null);
-        
-        await ctx.reply(`Ответ на запрос #${requestId} успешно отправлен пользователю ${requestData.username}.`);
-      } catch (error) {
-        console.error('Ошибка при обработке ответа от администратора:', error);
-        console.error('Подробности ошибки:', JSON.stringify(error));
-        await ctx.reply('Произошла ошибка при отправке ответа. Пожалуйста, повторите попытку позже.');
-        
-        // Сбрасываем состояние администратора при ошибке
-        cache.set(`admin_${adminId}_state`, null);
-      }
-    } 
-    // Обработка сообщений от обычных пользователей
-    else {
-      const userState = cache.get(`user_${ctx.from.id}_state`);
+    // Если пользователь в режиме ввода вопроса
+    if (userState === 'waiting_question') {
+      const questionText = ctx.message.text;
+      const questionCategory = cache.get(`user_${ctx.from.id}_category`) || QUESTION_CATEGORIES.OTHER;
       
-      // Если пользователь в режиме ввода вопроса
-      if (userState === 'waiting_question') {
-        const questionText = ctx.message.text;
-        const questionCategory = cache.get(`user_${ctx.from.id}_category`) || QUESTION_CATEGORIES.OTHER;
-        
-        // Генерируем уникальный ID для запроса
-        const requestId = `req_${Date.now()}_${ctx.from.id}`;
-        
-        // Сохраняем запрос в кэше
-        const requestData = {
-          id: requestId,
-          userId: ctx.from.id,
-          username: ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim(),
-          category: questionCategory,
-          text: questionText,
-          status: REQUEST_STATUS.NEW,
-          created: Date.now(),
-          lastActivity: Date.now()
-        };
-        
-        cache.set(`request_${requestId}`, requestData);
-        
-        // Добавляем запрос в список запросов пользователя
-        let userRequests = cache.get(`user_${ctx.from.id}_requests`) || [];
-        userRequests.push(requestId);
-        cache.set(`user_${ctx.from.id}_requests`, userRequests);
-        
-        // Отправляем подтверждение пользователю
-        await ctx.reply('Спасибо за ваш вопрос! Ваше обращение зарегистрировано и передано нашему куратору. Мы ответим вам в ближайшее время.');
-        
-        // Сбрасываем состояние пользователя
-        cache.set(`user_${ctx.from.id}_state`, null);
-        
-        console.log(`Зарегистрирован новый запрос #${requestId} от пользователя ${ctx.from.id}`);
-        
-        // Отправляем запрос куратору
-        const forwardResult = await forwardRequestToAdmin(requestData, ctx);
-        
-        // Если отправка не удалась, добавим в очередь на повторную отправку
-        if (!forwardResult) {
-          let pendingRequests = cache.get('pending_requests') || [];
-          pendingRequests.push(requestData.id);
-          cache.set('pending_requests', pendingRequests);
-          console.log(`Запрос #${requestId} добавлен в очередь на повторную отправку`);
-        }
-        
-        // Устанавливаем таймер для проверки ответа
-        setTimeout(() => checkRequestStatus(requestId, ctx), process.env.CURATOR_RESPONSE_TIMEOUT * 60 * 1000);
-      } else {
-        // Если не в режиме вопроса, предлагаем меню
-        await ctx.reply('Чем я могу вам помочь?', Markup.keyboard([
-          ['❓ Задать вопрос'],
-          ['📚 Частые вопросы', '📞 Связаться с командой']
-        ]).resize());
-      }
+      // Генерируем уникальный ID для запроса
+      const requestId = `req_${Date.now()}_${ctx.from.id}`;
+      
+      // Сохраняем запрос в кэше
+      const requestData = {
+        id: requestId,
+        userId: ctx.from.id,
+        username: ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim(),
+        category: questionCategory,
+        text: questionText,
+        status: REQUEST_STATUS.NEW,
+        created: Date.now(),
+        lastActivity: Date.now()
+      };
+      
+      cache.set(`request_${requestId}`, requestData);
+      
+      // Добавляем запрос в список запросов пользователя
+      let userRequests = cache.get(`user_${ctx.from.id}_requests`) || [];
+      userRequests.push(requestId);
+      cache.set(`user_${ctx.from.id}_requests`, userRequests);
+      
+      // Отправляем подтверждение пользователю
+      await ctx.reply('Спасибо за ваш вопрос! Ваше обращение зарегистрировано и передано нашему куратору. Мы ответим вам в ближайшее время.');
+      
+      // Сбрасываем состояние пользователя
+      cache.set(`user_${ctx.from.id}_state`, null);
+      
+      // Отправляем запрос администратору/куратору
+      await forwardRequestToAdmin(requestData, ctx);
+      
+      // Устанавливаем таймер для проверки ответа
+      setTimeout(() => checkRequestStatus(requestId, ctx), process.env.CURATOR_RESPONSE_TIMEOUT * 60 * 1000);
+    } else {
+      // Если не в режиме вопроса, предлагаем меню
+      await ctx.reply('Чем я могу вам помочь?', Markup.keyboard([
+        ['❓ Задать вопрос'],
+        ['📚 Частые вопросы', '📞 Связаться с командой']
+      ]).resize());
     }
   } catch (error) {
     console.error('Ошибка при обработке текстового сообщения:', error);
-    console.error('Подробности ошибки:', JSON.stringify(error));
     await ctx.reply('Произошла ошибка. Пожалуйста, повторите попытку позже.');
   }
 });
 
-// Функция для пересылки запроса куратору
+// Функция для пересылки запроса администратору/куратору
 async function forwardRequestToAdmin(requestData, ctx) {
   try {
     const adminChatId = process.env.ADMIN_CHAT_ID;
+    console.log(`Попытка отправить сообщение администратору. ID чата администратора: ${adminChatId}`);
     
-    // Проверка корректности ID куратора
-    if (!adminChatId || adminChatId.length < 6) {
-      console.error(`Некорректный ID куратора: ${adminChatId}. ID должен быть числом из 9-10 цифр для персональных аккаунтов`);
-      if (ctx) {
-        await ctx.reply('Извините, произошла ошибка при попытке связаться с куратором. Мы работаем над решением проблемы.');
-      }
-      return false;
-    }
-    
-    console.log(`Попытка отправить сообщение куратору. ID чата куратора: ${adminChatId}`);
-    
-    // Проверим сначала, что куратор доступен и бот может ему писать
-    try {
-      // Попробуем получить информацию о чате с куратором
-      // Или отправить маленькое сообщение, чтобы проверить доступность
-      await bot.telegram.sendChatAction(adminChatId, 'typing');
-      console.log('Куратор доступен для сообщений');
-    } catch (chatError) {
-      console.error('Ошибка при проверке доступности куратора:', chatError);
-      console.error('Подробности ошибки:', JSON.stringify(chatError));
-      
-      // Ошибка может означать, что куратор не начал диалог с ботом
-      if (ctx) {
-        await ctx.reply('Извините, произошла ошибка при попытке связаться с куратором. Возможно, куратор еще не начал диалог с ботом. Мы сохраним ваш вопрос и ответим на него как только это станет возможно.');
-      }
-      
-      // Сохраняем запрос и устанавливаем статус WAITING
-      requestData.status = REQUEST_STATUS.WAITING;
-      cache.set(`request_${requestData.id}`, requestData);
-      return false;
-    }
-    
-    // Формируем сообщение для куратора
+    // Формируем сообщение для админа
     let categoryText = 'Другое';
     switch (requestData.category) {
       case QUESTION_CATEGORIES.HOMEWORK:
@@ -393,32 +285,23 @@ async function forwardRequestToAdmin(requestData, ctx) {
 ${requestData.text}
 `;
     
-    console.log('Подготовлено сообщение для куратора:', adminMessage);
+    console.log('Подготовлено сообщение для администратора:', adminMessage);
     
-    // Отправляем сообщение куратору с кнопками для ответа
-    console.log('Отправляем сообщение куратору...');
-    try {
-      const sentMessage = await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
-        [Markup.button.callback(`✏️ Ответить на запрос #${requestData.id}`, `reply_${requestData.id}`)],
-        [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
-      ]));
-      
-      console.log('Сообщение успешно отправлено куратору:', sentMessage);
-    } catch (sendError) {
-      console.error('Ошибка при отправке сообщения куратору:', sendError);
-      if (ctx) {
-        await ctx.reply('Извините, произошла ошибка при передаче вашего вопроса куратору. Мы сохраним ваш вопрос и попробуем отправить его повторно.');
-      }
-      return false;
-    }
+    // Отправляем сообщение администратору с кнопками для ответа
+    console.log('Отправляем сообщение администратору...');
+    const sentMessage = await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
+      [Markup.button.callback(`✏️ Ответить на запрос #${requestData.id}`, `reply_${requestData.id}`)],
+      [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
+    ]));
+    
+    console.log('Сообщение успешно отправлено администратору:', sentMessage);
     
     // Обновляем статус запроса
     requestData.status = REQUEST_STATUS.WAITING;
     cache.set(`request_${requestData.id}`, requestData);
-    return true;
     
   } catch (error) {
-    console.error('Ошибка при пересылке запроса куратору:', error);
+    console.error('Ошибка при пересылке запроса администратору:', error);
     console.error('Подробности ошибки:', JSON.stringify(error));
     
     // Отправка уведомления пользователю в случае ошибки
@@ -430,69 +313,7 @@ ${requestData.text}
       }
     }
     
-    return false;
-  }
-}
-
-// Функция для попытки повторной отправки сообщений из очереди
-async function processPendingRequests() {
-  try {
-    // Получаем список ожидающих запросов
-    const pendingRequests = cache.get('pending_requests') || [];
-    
-    if (pendingRequests.length === 0) {
-      // Нет ожидающих запросов
-      return;
-    }
-    
-    console.log(`Найдено ${pendingRequests.length} ожидающих запросов. Попытка повторной отправки...`);
-    
-    // Обрабатываем не более 5 запросов за раз, чтобы не перегружать систему
-    const requestsToProcess = pendingRequests.slice(0, 5);
-    const remainingRequests = pendingRequests.slice(5);
-    
-    // Сохраняем оставшиеся запросы в очереди
-    cache.set('pending_requests', remainingRequests);
-    
-    // Обрабатываем каждый запрос
-    for (const requestId of requestsToProcess) {
-      const requestData = cache.get(`request_${requestId}`);
-      
-      if (!requestData) {
-        console.log(`Запрос #${requestId} не найден в кэше. Пропускаем.`);
-        continue;
-      }
-      
-      console.log(`Повторная отправка запроса #${requestId}...`);
-      
-      // Пытаемся отправить запрос куратору
-      const forwardResult = await forwardRequestToAdmin(requestData);
-      
-      if (forwardResult) {
-        console.log(`Запрос #${requestId} успешно отправлен куратору`);
-        
-        // Отправляем уведомление пользователю, что его запрос теперь доступен куратору
-        try {
-          await bot.telegram.sendMessage(
-            requestData.userId,
-            `Ваш вопрос успешно передан куратору. Ожидайте ответ в ближайшее время.`
-          );
-        } catch (notifyError) {
-          console.error(`Ошибка при отправке уведомления пользователю:`, notifyError);
-        }
-      } else {
-        console.log(`Не удалось отправить запрос #${requestId} куратору. Добавляем обратно в очередь.`);
-        
-        // Добавляем запрос обратно в конец очереди
-        remainingRequests.push(requestId);
-        cache.set('pending_requests', remainingRequests);
-      }
-      
-      // Небольшая пауза между отправками
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  } catch (error) {
-    console.error('Ошибка при обработке очереди запросов:', error);
+    throw error;
   }
 }
 
@@ -617,58 +438,77 @@ bot.action(/set_category_(.+)_(.+)/, async (ctx) => {
   }
 });
 
+// Обработка ответа от администратора
+bot.on('text', async (ctx) => {
+  // Для администраторов (обработка ответов)
+  const adminId = ctx.from.id;
+  const adminState = cache.get(`admin_${adminId}_state`);
+  
+  if (adminState === 'waiting_reply') {
+    try {
+      const requestId = cache.get(`admin_${adminId}_current_request`);
+      
+      if (!requestId) {
+        await ctx.reply('Ошибка: запрос не найден. Пожалуйста, начните сначала.');
+        cache.set(`admin_${adminId}_state`, null);
+        return;
+      }
+      
+      const requestData = cache.get(`request_${requestId}`);
+      
+      if (!requestData) {
+        await ctx.reply('Ошибка: запрос не найден или устарел. Пожалуйста, начните сначала.');
+        cache.set(`admin_${adminId}_state`, null);
+        return;
+      }
+      
+      const replyText = ctx.message.text;
+      
+      // Отправляем ответ пользователю
+      await bot.telegram.sendMessage(
+        requestData.userId,
+        `Ответ на ваш вопрос:\n\n${replyText}`
+      );
+      
+      // Обновляем статус запроса
+      requestData.status = REQUEST_STATUS.ANSWERED;
+      requestData.answerText = replyText;
+      requestData.answeredBy = ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
+      requestData.answeredAt = Date.now();
+      
+      cache.set(`request_${requestId}`, requestData);
+      
+      // Сбрасываем состояние администратора
+      cache.set(`admin_${adminId}_state`, null);
+      cache.set(`admin_${adminId}_current_request`, null);
+      
+      await ctx.reply(`Ответ на запрос #${requestId} успешно отправлен пользователю ${requestData.username}.`);
+    } catch (error) {
+      console.error('Ошибка при обработке ответа от администратора:', error);
+      await ctx.reply('Произошла ошибка при отправке ответа. Пожалуйста, повторите попытку позже.');
+      
+      // Сбрасываем состояние администратора при ошибке
+      cache.set(`admin_${adminId}_state`, null);
+    }
+  }
+});
+
 // Обработка ошибок
 bot.catch((err, ctx) => {
   console.error(`Ошибка для ${ctx.updateType}:`, err);
 });
 
-// Функция для инициализации диалога с куратором
-async function initCuratorChat() {
-  try {
-    const adminChatId = process.env.ADMIN_CHAT_ID;
-    console.log(`Попытка инициализации диалога с куратором (ID: ${adminChatId})`);
-    
-    // Попытка отправить приветственное сообщение
-    try {
-      // Получаем информацию о боте
-      const botInfo = await bot.telegram.getMe();
-      console.log(`Информация о боте:`, botInfo);
-      
-      // Отправляем приветственное сообщение
-      await bot.telegram.sendMessage(adminChatId, `Привет, я бот КурсНова. Проверяю связь с вами.`);
-      
-      console.log('Приветственное сообщение успешно отправлено');
-    } catch (initError) {
-      console.error('Ошибка при инициализации диалога:', initError);
-    }
-    
-    // Небольшая пауза перед отправкой основного сообщения
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    return true;
-  } catch (error) {
-    console.error('Ошибка при инициализации чата с куратором:', error);
-    console.error('Подробности ошибки:', JSON.stringify(error));
-    return false;
-  }
-}
-
 // Функция для отправки тестового сообщения при запуске
 async function sendTestMessageToAdmin() {
   try {
     const adminChatId = process.env.ADMIN_CHAT_ID;
-    console.log(`Отправка тестового сообщения куратору (ID: ${adminChatId})`);
+    console.log(`Отправка тестового сообщения администратору (ID: ${adminChatId})`);
     
     const message = `Тестовое сообщение: Бот КурсНова успешно запущен в ${new Date().toLocaleString()}.
 
-Если вы получили это сообщение, значит связь с ботом работает корректно.
-
-Для проверки работоспособности системы, пожалуйста, нажмите на кнопку ниже:`;
+Если вы получили это сообщение, значит связь с куратором работает корректно.`;
     
-    const result = await bot.telegram.sendMessage(adminChatId, message, Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Подтвердить работоспособность', 'confirm_functionality')]
-    ]));
-    
+    const result = await bot.telegram.sendMessage(adminChatId, message);
     console.log('Тестовое сообщение успешно отправлено:', result);
     return true;
   } catch (error) {
@@ -677,17 +517,6 @@ async function sendTestMessageToAdmin() {
     return false;
   }
 }
-
-// Обработчик подтверждения работоспособности
-bot.action('confirm_functionality', async (ctx) => {
-  try {
-    await ctx.answerCbQuery('Спасибо за подтверждение!');
-    await ctx.reply('Отлично! Система связи с куратором работает корректно. Теперь вы будете получать уведомления о вопросах пользователей.');
-    console.log('Куратор подтвердил работоспособность системы');
-  } catch (error) {
-    console.error('Ошибка при обработке подтверждения:', error);
-  }
-});
 
 // Запуск бота
 if (process.env.NODE_ENV === 'production') {
@@ -724,31 +553,13 @@ if (process.env.NODE_ENV === 'production') {
     .then(async () => {
       console.log('Бот КурсНова: чат с куратором запущен в режиме long polling');
       
-      // Инициализируем диалог с куратором
-      const initResult = await initCuratorChat();
-      if (initResult) {
-        console.log('Диалог с куратором успешно инициализирован');
-      } else {
-        console.log('Проблема при инициализации диалога с куратором');
-      }
-      
-      // Небольшая пауза перед отправкой тестового сообщения
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Отправляем тестовое сообщение куратору
+      // Отправляем тестовое сообщение администратору
       const testResult = await sendTestMessageToAdmin();
       if (testResult) {
-        console.log('Тестовое сообщение куратору успешно отправлено');
+        console.log('Тестовое сообщение администратору успешно отправлено');
       } else {
-        console.log('Ошибка при отправке тестового сообщения куратору. Проверьте ADMIN_CHAT_ID в файле .env');
+        console.log('Ошибка при отправке тестового сообщения администратору. Проверьте ADMIN_CHAT_ID в файле .env');
       }
-      
-      // Запускаем периодическую проверку и отправку запросов из очереди
-      // Проверка каждые 2 минуты
-      setInterval(async () => {
-        console.log('Запуск плановой обработки очереди запросов...');
-        await processPendingRequests();
-      }, 2 * 60 * 1000); // 2 минуты
     })
     .catch(err => {
       console.error('Ошибка при запуске бота:', err);
