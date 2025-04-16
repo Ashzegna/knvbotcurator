@@ -198,8 +198,9 @@ bot.hears('📞 Связаться с командой', async (ctx) => {
   }
 });
 
-// Объединенный обработчик текстовых сообщений
-bot.on('text', async (ctx) => {
+// Разделенные обработчики текстовых сообщений
+// Первый обработчик - только для администраторов, отвечающих на вопросы
+bot.on('text', async (ctx, next) => {
   try {
     // Проверяем, является ли отправитель куратором
     const adminChatId = process.env.ADMIN_CHAT_ID;
@@ -208,12 +209,10 @@ bot.on('text', async (ctx) => {
     const adminIdStr = adminChatId.toString();
     const isAdmin = userIdStr === adminIdStr;
     
-    console.log(`Проверка совпадения ID: пользователь (${userIdStr}), куратор (${adminIdStr}), результат: ${isAdmin}`);
-    
     // Проверяем состояние куратора
     const adminState = cache.get(`admin_${userId}_state`);
     
-    console.log(`Получено сообщение от ${userId}, isAdmin: ${isAdmin}, adminState: ${adminState}`, ctx.message.text);
+    console.log(`Проверка совпадения ID: пользователь (${userIdStr}), куратор (${adminIdStr}), результат: ${isAdmin}, adminState: ${adminState}`);
     
     // Если это куратор в режиме ответа на вопрос
     if (isAdmin && adminState === 'waiting_reply') {
@@ -324,64 +323,86 @@ bot.on('text', async (ctx) => {
         // Сбрасываем состояние куратора при ошибке
         cache.set(`admin_${userId}_state`, null);
       }
-    } 
-    // Обработка сообщений от обычных пользователей
-    else {
-      const userState = cache.get(`user_${ctx.from.id}_state`);
       
-      // Если пользователь в режиме ввода вопроса
-      if (userState === 'waiting_question') {
-        const questionText = ctx.message.text;
-        const questionCategory = cache.get(`user_${ctx.from.id}_category`) || QUESTION_CATEGORIES.OTHER;
-        
-        // Генерируем уникальный ID для запроса
-        const requestId = `req_${Date.now()}_${ctx.from.id}`;
-        
-        // Сохраняем запрос в кэше
-        const requestData = {
-          id: requestId,
-          userId: ctx.from.id,
-          username: ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim(),
-          category: questionCategory,
-          text: questionText,
-          status: REQUEST_STATUS.NEW,
-          created: Date.now(),
-          lastActivity: Date.now(),
-          chat_id: ctx.chat.id // Сохраняем ID чата для будущих ответов
-        };
-        
-        console.log(`Сохраняем данные запроса с chat_id=${ctx.chat.id}`);
-        
-        cache.set(`request_${requestId}`, requestData);
-        
-        // Добавляем запрос в список запросов пользователя
-        let userRequests = cache.get(`user_${ctx.from.id}_requests`) || [];
-        userRequests.push(requestId);
-        cache.set(`user_${ctx.from.id}_requests`, userRequests);
-        
-        // Отправляем подтверждение пользователю
-        await ctx.reply('Спасибо за ваш вопрос! Ваше обращение зарегистрировано и передано нашему куратору. Мы ответим вам в ближайшее время.');
-        
-        // Сбрасываем состояние пользователя
-        cache.set(`user_${ctx.from.id}_state`, null);
-        
-        console.log(`Зарегистрирован новый запрос #${requestId} от пользователя ${ctx.from.id} (chat_id: ${ctx.chat.id})`);
-        
-        // Отправляем запрос куратору
-        const forwardResult = await forwardRequestToAdmin(requestData, ctx);
-        
-        // Если отправка не удалась, добавим в очередь на повторную отправку
-        if (!forwardResult) {
-          let pendingRequests = cache.get('pending_requests') || [];
-          pendingRequests.push(requestData.id);
-          cache.set('pending_requests', pendingRequests);
-          console.log(`Запрос #${requestId} добавлен в очередь на повторную отправку`);
-        }
-        
-        // Устанавливаем таймер для проверки ответа
-        setTimeout(() => checkRequestStatus(requestId, ctx), process.env.CURATOR_RESPONSE_TIMEOUT * 60 * 1000);
-      } else {
-        // Если не в режиме вопроса, предлагаем меню
+      // Не передаем управление следующему обработчику, т.к. сообщение уже обработано
+      return;
+    }
+    
+    // Если это не ответ от администратора, передаем управление следующему обработчику
+    return next();
+    
+  } catch (error) {
+    console.error('Ошибка в обработчике администратора:', error);
+    console.error('Подробности ошибки:', JSON.stringify(error));
+    return next(); // В случае ошибки все равно передаем управление следующему обработчику
+  }
+});
+
+// Второй обработчик - для обычных пользователей и всех остальных сообщений
+bot.on('text', async (ctx) => {
+  try {
+    // Получаем состояние пользователя
+    const userState = cache.get(`user_${ctx.from.id}_state`);
+    
+    // Если пользователь в режиме ввода вопроса
+    if (userState === 'waiting_question') {
+      const questionText = ctx.message.text;
+      const questionCategory = cache.get(`user_${ctx.from.id}_category`) || QUESTION_CATEGORIES.OTHER;
+      
+      // Генерируем уникальный ID для запроса
+      const requestId = `req_${Date.now()}_${ctx.from.id}`;
+      
+      // Сохраняем запрос в кэше
+      const requestData = {
+        id: requestId,
+        userId: ctx.from.id,
+        username: ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim(),
+        category: questionCategory,
+        text: questionText,
+        status: REQUEST_STATUS.NEW,
+        created: Date.now(),
+        lastActivity: Date.now(),
+        chat_id: ctx.chat.id // Сохраняем ID чата для будущих ответов
+      };
+      
+      console.log(`Сохраняем данные запроса с chat_id=${ctx.chat.id}`);
+      
+      cache.set(`request_${requestId}`, requestData);
+      
+      // Добавляем запрос в список запросов пользователя
+      let userRequests = cache.get(`user_${ctx.from.id}_requests`) || [];
+      userRequests.push(requestId);
+      cache.set(`user_${ctx.from.id}_requests`, userRequests);
+      
+      // Отправляем подтверждение пользователю
+      await ctx.reply('Спасибо за ваш вопрос! Ваше обращение зарегистрировано и передано нашему куратору. Мы ответим вам в ближайшее время.');
+      
+      // Сбрасываем состояние пользователя
+      cache.set(`user_${ctx.from.id}_state`, null);
+      
+      console.log(`Зарегистрирован новый запрос #${requestId} от пользователя ${ctx.from.id} (chat_id: ${ctx.chat.id})`);
+      
+      // Отправляем запрос куратору
+      const forwardResult = await forwardRequestToAdmin(requestData, ctx);
+      
+      // Если отправка не удалась, добавим в очередь на повторную отправку
+      if (!forwardResult) {
+        let pendingRequests = cache.get('pending_requests') || [];
+        pendingRequests.push(requestData.id);
+        cache.set('pending_requests', pendingRequests);
+        console.log(`Запрос #${requestId} добавлен в очередь на повторную отправку`);
+      }
+      
+      // Устанавливаем таймер для проверки ответа
+      setTimeout(() => checkRequestStatus(requestId, ctx), process.env.CURATOR_RESPONSE_TIMEOUT * 60 * 1000);
+    } else {
+      // Проверяем, не является ли отправитель куратором
+      const adminChatId = process.env.ADMIN_CHAT_ID;
+      const userId = ctx.from.id;
+      const isAdmin = userId.toString() === adminChatId.toString();
+      
+      // Если это не куратор или у куратора нет активного состояния ответа, предлагаем меню
+      if (!isAdmin || !cache.get(`admin_${userId}_state`)) {
         await ctx.reply('Чем я могу вам помочь?', Markup.keyboard([
           ['❓ Задать вопрос'],
           ['📚 Частые вопросы', '📞 Связаться с командой']

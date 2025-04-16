@@ -274,8 +274,8 @@ bot.on('text', async (ctx) => {
 // Функция для пересылки запроса администратору/куратору
 async function forwardRequestToAdmin(requestData, ctx) {
   try {
-    // Жестко задаем ID куратора и проверяем его наличие
-    const adminChatId = "2103397"; // Фиксированный ID куратора
+    // Используем ID куратора из переменных окружения
+    const adminChatId = process.env.ADMIN_CHAT_ID; // ID куратора из .env
     
     console.log(`Отправляю запрос куратору с ID: ${adminChatId}`);
     
@@ -352,7 +352,7 @@ async function checkRequestStatus(requestId, ctx) {
       );
       
       // Отправляем напоминание администратору
-      const adminChatId = "2103397"; // Фиксированный ID куратора
+      const adminChatId = process.env.ADMIN_CHAT_ID; // ID куратора из .env
       await bot.telegram.sendMessage(
         adminChatId,
         `⚠️ Напоминание: запрос #${requestId} от пользователя ${requestData.username} ожидает ответа уже более ${process.env.CURATOR_RESPONSE_TIMEOUT} минут!`,
