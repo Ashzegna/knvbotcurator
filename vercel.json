@@ -17,6 +17,9 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "BOT_TOKEN": "7801981825:AAHUZcti--Nqd96ntIjN2-LvNatPdiPJZKs",
+    "ADMIN_CHAT_ID": "2103397",
+    "CURATOR_RESPONSE_TIMEOUT": "15"
   }
 }

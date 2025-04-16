@@ -48,27 +48,22 @@ npm run dev
 
 1. Зарегистрируйтесь или войдите в [Vercel](https://vercel.com/)
 
-2. Установите Vercel CLI:
-```bash
-npm install -g vercel
-```
+2. Создайте новый проект и свяжите его с вашим GitHub-репозиторием
 
-3. Запустите деплой:
-```bash
-vercel
-```
+3. **ВАЖНО:** Настройте переменные окружения в панели управления Vercel:
+   - Перейдите в раздел "Settings" -> "Environment Variables"
+   - Добавьте следующие переменные:
+     - `BOT_TOKEN` = Ваш токен бота
+     - `ADMIN_CHAT_ID` = ID куратора (2103397)
+     - `CURATOR_RESPONSE_TIMEOUT` = 15
+     - `NODE_ENV` = production
+   - Нажмите "Save" и перезапустите деплой
 
-4. Следуйте инструкциям в командной строке, чтобы связать проект с вашим аккаунтом Vercel
-
-5. Настройте переменные окружения в панели управления Vercel:
-   - `BOT_TOKEN`
-   - `ADMIN_CHAT_ID`
-   - `CURATOR_RESPONSE_TIMEOUT`
-
-6. Настройте webhook для вашего бота:
-```
-https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_VERCEL_URL>
-```
+4. Настройте webhook для вашего бота:
+   - Откройте в браузере следующий URL (замените YOUR_BOT_TOKEN на ваш токен):
+   ```
+   https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook?url=https://ваш-проект.vercel.app/api/webhook
+   ```
 
 ## Структура проекта
 

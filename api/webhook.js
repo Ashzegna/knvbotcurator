@@ -4,8 +4,22 @@ const { Telegraf, Markup } = require('telegraf');
 const NodeCache = require('node-cache');
 const moment = require('moment');
 
-// Инициализация бота
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// Проверка наличия BOT_TOKEN
+if (!process.env.BOT_TOKEN) {
+  console.error('Критическая ошибка: BOT_TOKEN не найден в переменных окружения!');
+}
+
+// Печатаем все переменные окружения для диагностики (без токена)
+console.log('Настройки окружения:', {
+  NODE_ENV: process.env.NODE_ENV,
+  ADMIN_CHAT_ID: process.env.ADMIN_CHAT_ID,
+  CURATOR_RESPONSE_TIMEOUT: process.env.CURATOR_RESPONSE_TIMEOUT,
+  BOT_TOKEN_EXISTS: !!process.env.BOT_TOKEN
+});
+
+// Инициализация бота с жесткой проверкой токена
+const botToken = process.env.BOT_TOKEN || '';
+const bot = new Telegraf(botToken);
 
 // Инициализация кэша для хранения данных
 const cache = new NodeCache({ stdTTL: 86400 }); // хранение данных в течение 24 часов
@@ -73,6 +87,12 @@ bot.hears('❓ Задать вопрос', async (ctx) => {
 // Функция для API Webhook
 module.exports = async (req, res) => {
   try {
+    // Проверка наличия токена бота
+    if (!process.env.BOT_TOKEN) {
+      console.error('Критическая ошибка: BOT_TOKEN не найден в переменных окружения!');
+      return res.status(500).send('Configuration Error: BOT_TOKEN is missing');
+    }
+
     // Заглушка для GET-запросов (проверка доступности)
     if (req.method === 'GET') {
       return res.status(200).send('Telegram Bot Webhook is active!');
@@ -84,7 +104,7 @@ module.exports = async (req, res) => {
       return res.status(200).send('OK but no request body');
     }
     
-    console.log('Получен запрос webhook');
+    console.log('Получен запрос webhook:', JSON.stringify(req.body, null, 2));
     
     // Обрабатываем обновление от Telegram
     await bot.handleUpdate(req.body);
@@ -94,6 +114,6 @@ module.exports = async (req, res) => {
     return res.status(200).send('OK');
   } catch (error) {
     console.error('Ошибка при обработке webhook:', error);
-    return res.status(500).send('Internal Server Error: ' + error.message);
+    return res.status(500).send(`Internal Server Error: ${error.message}`);
   }
 };
