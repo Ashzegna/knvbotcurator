@@ -201,24 +201,28 @@ bot.hears('📞 Связаться с командой', async (ctx) => {
 // Объединенный обработчик текстовых сообщений
 bot.on('text', async (ctx) => {
   try {
-    // Проверяем, является ли отправитель администратором
+    // Проверяем, является ли отправитель куратором
     const adminChatId = process.env.ADMIN_CHAT_ID;
-    const isAdmin = ctx.from.id.toString() === adminChatId.toString();
+    const userId = ctx.from.id;
+    const userIdStr = userId.toString();
+    const adminIdStr = adminChatId.toString();
+    const isAdmin = userIdStr === adminIdStr;
     
-    // Проверяем состояние администратора
-    const adminId = ctx.from.id;
-    const adminState = cache.get(`admin_${adminId}_state`);
+    console.log(`Проверка совпадения ID: пользователь (${userIdStr}), куратор (${adminIdStr}), результат: ${isAdmin}`);
     
-    console.log(`Получено сообщение от ${ctx.from.id}, isAdmin: ${isAdmin}, adminState: ${adminState}`);
+    // Проверяем состояние куратора
+    const adminState = cache.get(`admin_${userId}_state`);
     
-    // Если это администратор в режиме ответа на вопрос
+    console.log(`Получено сообщение от ${userId}, isAdmin: ${isAdmin}, adminState: ${adminState}`, ctx.message.text);
+    
+    // Если это куратор в режиме ответа на вопрос
     if (isAdmin && adminState === 'waiting_reply') {
       try {
-        const requestId = cache.get(`admin_${adminId}_current_request`);
+        const requestId = cache.get(`admin_${userId}_current_request`);
         
         if (!requestId) {
           await ctx.reply('Ошибка: запрос не найден. Пожалуйста, начните сначала.');
-          cache.set(`admin_${adminId}_state`, null);
+          cache.set(`admin_${userId}_state`, null);
           return;
         }
         
@@ -226,7 +230,7 @@ bot.on('text', async (ctx) => {
         
         if (!requestData) {
           await ctx.reply('Ошибка: запрос не найден или устарел. Пожалуйста, начните сначала.');
-          cache.set(`admin_${adminId}_state`, null);
+          cache.set(`admin_${userId}_state`, null);
           return;
         }
         
@@ -234,34 +238,45 @@ bot.on('text', async (ctx) => {
         
         console.log(`Отправка ответа пользователю ${requestData.userId} на запрос ${requestId}`);
         
-        // Отправляем ответ пользователю
-        const sentMessage = await bot.telegram.sendMessage(
-          requestData.userId,
-          `Ответ на ваш вопрос:\n\n${replyText}`
-        );
-        
-        console.log(`Ответ успешно отправлен пользователю:`, sentMessage);
-        
-        // Обновляем статус запроса
-        requestData.status = REQUEST_STATUS.ANSWERED;
-        requestData.answerText = replyText;
-        requestData.answeredBy = ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
-        requestData.answeredAt = Date.now();
-        
-        cache.set(`request_${requestId}`, requestData);
-        
-        // Сбрасываем состояние администратора
-        cache.set(`admin_${adminId}_state`, null);
-        cache.set(`admin_${adminId}_current_request`, null);
-        
-        await ctx.reply(`Ответ на запрос #${requestId} успешно отправлен пользователю ${requestData.username}.`);
+        // Отправляем ответ пользователю с обработкой ошибок
+        try {
+          const sentMessage = await bot.telegram.sendMessage(
+            requestData.userId,
+            `Ответ на ваш вопрос:\n\n${replyText}`
+          );
+          
+          console.log(`Ответ успешно отправлен пользователю:`, sentMessage);
+          
+          // Обновляем статус запроса
+          requestData.status = REQUEST_STATUS.ANSWERED;
+          requestData.answerText = replyText;
+          requestData.answeredBy = ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
+          requestData.answeredAt = Date.now();
+          
+          cache.set(`request_${requestId}`, requestData);
+          
+          // Сбрасываем состояние куратора
+          cache.set(`admin_${userId}_state`, null);
+          cache.set(`admin_${userId}_current_request`, null);
+          
+          await ctx.reply(`Ответ на запрос #${requestId} успешно отправлен пользователю ${requestData.username}.`);
+        } catch (sendError) {
+          console.error('Ошибка при отправке ответа пользователю:', sendError);
+          console.error('Подробности ошибки:', JSON.stringify(sendError));
+          
+          await ctx.reply(`Ошибка при отправке ответа! Пользователь с ID ${requestData.userId} недоступен или заблокировал бота.`);
+          
+          // Сбрасываем состояние куратора при ошибке
+          cache.set(`admin_${userId}_state`, null);
+          cache.set(`admin_${userId}_current_request`, null);
+        }
       } catch (error) {
-        console.error('Ошибка при обработке ответа от администратора:', error);
+        console.error('Ошибка при обработке ответа от куратора:', error);
         console.error('Подробности ошибки:', JSON.stringify(error));
         await ctx.reply('Произошла ошибка при отправке ответа. Пожалуйста, повторите попытку позже.');
         
-        // Сбрасываем состояние администратора при ошибке
-        cache.set(`admin_${adminId}_state`, null);
+        // Сбрасываем состояние куратора при ошибке
+        cache.set(`admin_${userId}_state`, null);
       }
     } 
     // Обработка сообщений от обычных пользователей
