@@ -238,8 +238,20 @@ bot.on('text', async (ctx) => {
         
         console.log(`Отправка ответа пользователю ${requestData.userId} на запрос ${requestId}`);
         
-        // Отправляем ответ пользователю с обработкой ошибок
+        // Отправка ответа пользователю с расширенной диагностикой
         try {
+          console.log(`Попытка отправить ответ пользователю ${requestData.userId}. Текст: "${replyText}"`);
+          
+          // Проверяем доступность пользователя (отправляем индикатор печати)
+          try {
+            await bot.telegram.sendChatAction(requestData.userId, 'typing');
+            console.log(`Пользователь ${requestData.userId} доступен для сообщений`);
+          } catch (chatError) {
+            console.error(`Ошибка при проверке доступности пользователя:`, chatError);
+            throw new Error(`Пользователь недоступен: ${chatError.message}`);
+          }
+          
+          // Непосредственная отправка сообщения
           const sentMessage = await bot.telegram.sendMessage(
             requestData.userId,
             `Ответ на ваш вопрос:\n\n${replyText}`
@@ -255,6 +267,16 @@ bot.on('text', async (ctx) => {
           
           cache.set(`request_${requestId}`, requestData);
           
+          // Отправляем подтверждение
+          try {
+            await ctx.telegram.sendMessage(
+              requestData.userId,
+              'Если у вас остались вопросы, не стесняйтесь спрашивать!'
+            );
+          } catch (confirmError) {
+            console.log('Не удалось отправить подтверждающее сообщение:', confirmError);
+          }
+          
           // Сбрасываем состояние куратора
           cache.set(`admin_${userId}_state`, null);
           cache.set(`admin_${userId}_current_request`, null);
@@ -264,7 +286,31 @@ bot.on('text', async (ctx) => {
           console.error('Ошибка при отправке ответа пользователю:', sendError);
           console.error('Подробности ошибки:', JSON.stringify(sendError));
           
-          await ctx.reply(`Ошибка при отправке ответа! Пользователь с ID ${requestData.userId} недоступен или заблокировал бота.`);
+          await ctx.reply(`Ошибка при отправке ответа! Пользователь с ID ${requestData.userId} недоступен или заблокировал бота. Ошибка: ${sendError.message}`);
+          
+          // Попытка отправить через API Telegram напрямую
+          try {
+            console.log('Попытка отправить через альтернативный метод...');
+            
+            await ctx.telegram.sendMessage(
+              requestData.userId,
+              `Ответ на ваш вопрос:\n\n${replyText}`
+            );
+            
+            console.log('Сообщение отправлено альтернативным методом!');
+            await ctx.reply('Сообщение доставлено альтернативным способом.');
+            
+            // Обновляем статус запроса
+            requestData.status = REQUEST_STATUS.ANSWERED;
+            requestData.answerText = replyText;
+            requestData.answeredBy = ctx.from.username || `${ctx.from.first_name} ${ctx.from.last_name || ''}`.trim();
+            requestData.answeredAt = Date.now();
+            
+            cache.set(`request_${requestId}`, requestData);
+          } catch (altError) {
+            console.error('Альтернативный метод тоже не сработал:', altError);
+            await ctx.reply('Альтернативный метод доставки тоже не сработал.');
+          }
           
           // Сбрасываем состояние куратора при ошибке
           cache.set(`admin_${userId}_state`, null);
@@ -300,8 +346,11 @@ bot.on('text', async (ctx) => {
           text: questionText,
           status: REQUEST_STATUS.NEW,
           created: Date.now(),
-          lastActivity: Date.now()
+          lastActivity: Date.now(),
+          chat_id: ctx.chat.id // Сохраняем ID чата для будущих ответов
         };
+        
+        console.log(`Сохраняем данные запроса с chat_id=${ctx.chat.id}`);
         
         cache.set(`request_${requestId}`, requestData);
         
@@ -316,7 +365,7 @@ bot.on('text', async (ctx) => {
         // Сбрасываем состояние пользователя
         cache.set(`user_${ctx.from.id}_state`, null);
         
-        console.log(`Зарегистрирован новый запрос #${requestId} от пользователя ${ctx.from.id}`);
+        console.log(`Зарегистрирован новый запрос #${requestId} от пользователя ${ctx.from.id} (chat_id: ${ctx.chat.id})`);
         
         // Отправляем запрос куратору
         const forwardResult = await forwardRequestToAdmin(requestData, ctx);
@@ -400,7 +449,7 @@ async function forwardRequestToAdmin(requestData, ctx) {
     const adminMessage = `
 📩 Новый запрос #${requestData.id}
 
-👤 Пользователь: ${requestData.username} (ID: ${requestData.userId})
+👤 Пользователь: ${requestData.username} (ID: ${requestData.userId}, Chat ID: ${requestData.chat_id || "Неизвестно"})
 📂 Категория: ${categoryText}
 ⏱ Время: ${moment(requestData.created).format('DD.MM.YYYY HH:mm:ss')}
 
@@ -488,10 +537,19 @@ async function processPendingRequests() {
         
         // Отправляем уведомление пользователю, что его запрос теперь доступен куратору
         try {
-          await bot.telegram.sendMessage(
-            requestData.userId,
-            `Ваш вопрос успешно передан куратору. Ожидайте ответ в ближайшее время.`
-          );
+          if (requestData.chat_id) {
+            console.log(`Отправка уведомления в chat_id: ${requestData.chat_id}`);
+            await bot.telegram.sendMessage(
+              requestData.chat_id,
+              `Ваш вопрос успешно передан куратору. Ожидайте ответ в ближайшее время.`
+            );
+          } else {
+            console.log(`Отправка уведомления в userId: ${requestData.userId}`);
+            await bot.telegram.sendMessage(
+              requestData.userId,
+              `Ваш вопрос успешно передан куратору. Ожидайте ответ в ближайшее время.`
+            );
+          }
         } catch (notifyError) {
           console.error(`Ошибка при отправке уведомления пользователю:`, notifyError);
         }
@@ -522,10 +580,21 @@ async function checkRequestStatus(requestId, ctx) {
       cache.set(`request_${requestId}`, requestData);
       
       // Отправляем уведомление пользователю
-      await bot.telegram.sendMessage(
-        requestData.userId,
-        'Прости, нас завалило вопросами. Разбираемся в порядке очередности. Обязательно ответим в течение часа, но постараемся раньше 👍'
-      );
+      try {
+        if (requestData.chat_id) {
+          await bot.telegram.sendMessage(
+            requestData.chat_id,
+            'Прости, нас завалило вопросами. Разбираемся в порядке очередности. Обязательно ответим в течение часа, но постараемся раньше 👍'
+          );
+        } else {
+          await bot.telegram.sendMessage(
+            requestData.userId,
+            'Прости, нас завалило вопросами. Разбираемся в порядке очередности. Обязательно ответим в течение часа, но постараемся раньше 👍'
+          );
+        }
+      } catch (sendError) {
+        console.error('Ошибка при отправке уведомления пользователю:', sendError);
+      }
       
       // Отправляем напоминание администратору
       const adminChatId = process.env.ADMIN_CHAT_ID;
@@ -560,8 +629,14 @@ bot.action(/reply_(.+)/, async (ctx) => {
     // Устанавливаем состояние "ожидание ответа от админа"
     cache.set(`admin_${adminId}_state`, 'waiting_reply');
     
+    // Формируем информацию о пользователе для куратора
+    let userInfo = `Имя пользователя: ${requestData.username}\nID пользователя: ${requestData.userId}`;
+    if (requestData.chat_id) {
+      userInfo += `\nID чата: ${requestData.chat_id}`;
+    }
+    
     await ctx.answerCbQuery();
-    await ctx.reply(`Введите ваш ответ на запрос #${requestId} от пользователя ${requestData.username}:\n\n${requestData.text}`);
+    await ctx.reply(`Введите ваш ответ на запрос #${requestId} от пользователя ${requestData.username}:\n\n${requestData.text}\n\nИнформация о пользователе:\n${userInfo}`);
   } catch (error) {
     console.error('Ошибка при обработке нажатия на кнопку "Ответить на запрос":', error);
     await ctx.answerCbQuery('Произошла ошибка. Пожалуйста, повторите попытку позже.');
