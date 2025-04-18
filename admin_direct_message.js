@@ -1,4 +1,48 @@
 /**
+ * Дополнительная функция для получения данных пользователя из кэша
+ * 
+ * @param {Object} cache - Кэш для хранения данных
+ * @param {String} userId - ID пользователя
+ * @returns {Object|null} Данные пользователя или null, если не найдены
+ */
+function getUserData(cache, userId) {
+  try {
+    // Проверяем, есть ли уже профиль в кэше
+    const profileData = cache.get(`user_profile_${userId}`);
+    if (profileData) {
+      return profileData;
+    }
+    
+    // Ищем пользователя среди запросов
+    const keys = cache.keys();
+    const requestKeys = keys.filter(key => key.startsWith('request_'));
+    
+    let userData = null;
+    for (const key of requestKeys) {
+      const request = cache.get(key);
+      if (request && request.userId == userId) {
+        userData = {
+          id: request.userId,
+          username: request.username || null,
+          direct_link: `tg://user?id=${userId}`,
+          web_link: request.username ? `https://t.me/${request.username}` : `https://t.me/user?id=${userId}`,
+          last_activity: request.lastActivity || request.created || Date.now()
+        };
+        break;
+      }
+    }
+    
+    if (userData) {
+      // Сохраняем для быстрого доступа в будущем
+      cache.set(`user_profile_${userId}`, userData);
+    }
+    
+    return userData;
+  } catch (error) {
+    console.error('Ошибка при получении данных пользователя:', error);
+    return null;
+  }
+}/**
  * Модуль для расширения функционала прямого общения администратора с пользователями
  * 
  * Данный модуль добавляет возможность администратору открывать прямой диалог
@@ -51,17 +95,17 @@ async function forwardRequestToAdminWithDirectLink(bot, requestData, ctx, QUESTI
 📌 Текст запроса:
 ${requestData.text}
 
-💬 Чтобы ответить напрямую:
-• Через команду: /dm ${requestData.userId} Ваш ответ
-• Или используйте кнопку "Прямой чат с пользователем" ниже
+🔗 Для прямого ответа нажмите кнопку "Написать напрямую" ниже.
+💡 Или используйте команду: /direct ${requestData.userId}
 `;
     
-    // Попытка прямой отправки сообщения куратору с кнопками
+    // Попытка прямой отправки сообщения куратору с улучшенным интерфейсом
     try {
       // Отправляем сообщение администратору с кнопками для ответа и прямого чата
+      // Создаем улучшенную кнопку для прямого диалога
       await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
-        [Markup.button.callback(`✏️ Ответить на запрос #${requestData.id}`, `reply_${requestData.id}`)],
-        [Markup.button.url(`💬 Прямой чат с пользователем`, `tg://user?id=${requestData.userId}`)],
+        [Markup.button.url(`📱 Открыть диалог с пользователем`, `tg://user?id=${requestData.userId}`)],
+        [Markup.button.callback(`✏️ Ответить через бота`, `reply_${requestData.id}`)],
         [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
       ]));
       
@@ -69,11 +113,16 @@ ${requestData.text}
     } catch (sendError) {
       console.error(`Ошибка при отправке сообщения куратору:`, sendError);
       
-      // Альтернативный вариант с https ссылкой вместо tg:// протокола
+      // Попробуем альтернативный формат для прямого чата (https://t.me/)
       try {
+        // Альтернативный вариант ссылки на пользователя через web.telegram.org
+        const userLink = requestData.username ? 
+          `https://t.me/${requestData.username}` : 
+          `https://t.me/user?id=${requestData.userId}`;
+          
         await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
-          [Markup.button.callback(`✏️ Ответить на запрос #${requestData.id}`, `reply_${requestData.id}`)],
-          [Markup.button.url(`💬 Прямой чат с пользователем`, `https://t.me/${requestData.userId}`)],
+          [Markup.button.url(`📱 Открыть диалог с пользователем`, userLink)],
+          [Markup.button.callback(`✏️ Ответить через бота`, `reply_${requestData.id}`)],
           [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
         ]));
         console.log(`Отправлено альтернативное сообщение куратору ${adminChatId}`);
@@ -98,7 +147,52 @@ ${requestData.text}
   }
 }
 
-// Экспортируем функцию
+/**
+ * Функция для создания прямой ссылки на чат с пользователем
+ * 
+ * @param {Object} bot - Экземпляр бота Telegraf
+ * @param {String} userId - ID пользователя для чата
+ * @param {String} username - Имя пользователя (необязательно)
+ * @returns {Object} Объект с URL и инструкциями
+ */
+function createDirectChatLink(userId, username) {
+  try {
+    // Основная ссылка на прямой чат (tg:// протокол)
+    const directTgLink = `tg://user?id=${userId}`;
+    
+    // Альтернативная ссылка через https://t.me/
+    const alternativeLink = username ? 
+      `https://t.me/${username}` : 
+      `https://t.me/user?id=${userId}`;
+    
+    // Инструкции для администратора
+    const instructions = `Чтобы начать прямой диалог с пользователем (ID: ${userId}), нажмите на кнопку ниже.
+
+ℹ️ Важные примечания:
+• При нажатии на кнопку откроется чат с пользователем напрямую в Telegram
+• Вы будете общаться от вашего личного аккаунта Telegram
+• Пользователь будет видеть ваш профиль, а не бота
+• Сообщения в прямом чате не проходят через систему бота`;
+    
+    // Добавляем дополнительные полезные данные
+    return {
+      directLink: directTgLink,
+      alternativeLink: alternativeLink,
+      instructions: instructions,
+      userId: userId,
+      username: username || null,
+      deepLink: `telegram://user?id=${userId}`, // Еще один формат ссылки для некоторых клиентов
+      helpText: 'Нажмите на кнопку выше, чтобы открыть прямой диалог с пользователем '
+    };
+  } catch (error) {
+    console.error('Ошибка при создании ссылки на прямой чат:', error);
+    return null;
+  }
+}
+
+// Экспортируем функции
 module.exports = {
-  forwardRequestToAdminWithDirectLink
+  forwardRequestToAdminWithDirectLink,
+  createDirectChatLink,
+  getUserData
 };

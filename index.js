@@ -4,6 +4,10 @@ const { Telegraf, Markup } = require('telegraf');
 const NodeCache = require('node-cache');
 const moment = require('moment');
 
+// Импортируем модули для работы с администраторами
+const { forwardRequestToAdminWithDirectLink, createDirectChatLink } = require('./admin_direct_message');
+const initAdminCommands = require('./admin_commands');
+
 // Проверка наличия BOT_TOKEN
 if (!process.env.BOT_TOKEN) {
   console.error('Критическая ошибка: BOT_TOKEN не найден в переменных окружения!');
@@ -24,6 +28,9 @@ const bot = new Telegraf(botToken);
 
 // Инициализация кэша для хранения данных
 const cache = new NodeCache({ stdTTL: 86400 }); // хранение данных в течение 24 часов
+
+// Инициализируем команды администратора
+const adminCommandsHelpers = initAdminCommands(bot);
 
 // Константы для статусов запросов
 const REQUEST_STATUS = {
@@ -81,15 +88,23 @@ bot.help(async (ctx) => {
       const adminHelp = `Справка по работе с ботом (для куратора):\n\n` +
         `/start - Начать работу с ботом\n` +
         `/help - Показать эту справку\n` +
+        `/direct ID_ПОЛЬЗОВАТЕЛЯ - Получить ссылку для прямого чата в Telegram (***РЕКОМЕНДУЕТСЯ***)\n` +
         `/dm ID_ПОЛЬЗОВАТЕЛЯ ТЕКСТ - Отправить сообщение пользователю через бота\n` +
-        `/direct ID_ПОЛЬЗОВАТЕЛЯ - Получить ссылку для прямого чата в Telegram\n` +
         `/users - Показать список последних активных пользователей\n` +
         `/reset - Сбросить текущее состояние\n\n` +
+        `🔥 Новая функциональность - прямое общение с пользующимися через Ваш личный аккаунт:\n\n` +
         `При получении нового вопроса от пользователя, вы можете:\n` +
         `1. Нажать на кнопку "Написать напрямую" для прямого чата в Telegram\n` +
-        `2. Отправить сообщение через бота с помощью команды /dm`;
+        `2. Использовать команду /direct ID_ПОЛЬЗОВАТЕЛЯ для получения ссылки на прямой чат\n` +
+        `3. Писать ответ через бота с помощью кнопки "Ответить через бота"\n\n` +
+        `Примечание: при общении через прямой чат, Вы будете видны пользователю как свой личный аккаунт Telegram.`;
       
-      await ctx.reply(adminHelp);
+      await ctx.reply(adminHelp, { disable_web_page_preview: true });
+      
+      // Добавляем кнопку для просмотра последних пользователей
+      await ctx.reply('Быстрые команды:', Markup.inlineKeyboard([
+        [Markup.button.callback('👤 Последние пользователи', 'admin_show_users')]
+      ]));
       return;
     }
     
@@ -104,6 +119,136 @@ bot.help(async (ctx) => {
   } catch (error) {
     console.error('Ошибка в обработчике команды /help:', error);
     await ctx.reply('Произошла ошибка при показе справки.');
+  }
+});
+
+// Обработчик для кнопки "Последние пользователи"
+bot.action('admin_show_users', async (ctx) => {
+  try {
+    const adminChatId = process.env.ADMIN_CHAT_ID;
+    const userId = ctx.from.id;
+    const isAdmin = userId.toString() === adminChatId.toString();
+    
+    if (!isAdmin) {
+      await ctx.answerCbQuery('Эта функция доступна только администратору');
+      return;
+    }
+    
+    await ctx.answerCbQuery();
+    
+    // Получаем все запросы из кэша
+    const keys = cache.keys();
+    const requestKeys = keys.filter(key => key.startsWith('request_'));
+    
+    // Собираем информацию о пользователях
+    const users = new Map();
+    requestKeys.forEach(key => {
+      const request = cache.get(key);
+      if (request && request.userId) {
+        users.set(request.userId, {
+          username: request.username,
+          lastActivity: request.lastActivity || request.created,
+          userId: request.userId
+        });
+      }
+    });
+    
+    // Преобразуем в массив и сортируем по последней активности
+    const userList = Array.from(users.values())
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
+      .slice(0, 5); // Берем только 5 последних пользователей
+    
+    if (userList.length === 0) {
+      await ctx.reply('Нет активных пользователей в последнее время.');
+      return;
+    }
+    
+    // Создаем улучшенные кнопки для прямого диалога с пользователями
+    const buttons = [];
+    
+    userList.forEach(user => {
+      const date = new Date(user.lastActivity || Date.now()).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      // Добавляем строку с информацией о пользователе
+      buttons.push([
+        Markup.button.url(`📱 ${user.username} (${date})`, `tg://user?id=${user.userId}`)
+      ]);
+    });
+    
+    // Добавляем кнопку получения полного списка
+    buttons.push([Markup.button.callback('📝 Полный список пользователей', 'admin_full_users_list')]);
+    
+    await ctx.reply('Последние активные пользователи (нажмите на кнопку, чтобы открыть прямой диалог):', Markup.inlineKeyboard(buttons));
+  } catch (error) {
+    console.error('Ошибка при получении списка пользователей:', error);
+    await ctx.answerCbQuery('Произошла ошибка при получении списка пользователей');
+    await ctx.reply('Произошла ошибка при получении списка пользователей. Попробуйте команду /users');
+  }
+});
+
+// Обработчик для кнопки "Полный список пользователей"
+bot.action('admin_full_users_list', async (ctx) => {
+  try {
+    const adminChatId = process.env.ADMIN_CHAT_ID;
+    const userId = ctx.from.id;
+    const isAdmin = userId.toString() === adminChatId.toString();
+    
+    if (!isAdmin) {
+      await ctx.answerCbQuery('Эта функция доступна только администратору');
+      return;
+    }
+    
+    await ctx.answerCbQuery();
+    
+    // Получаем все запросы из кэша
+    const keys = cache.keys();
+    const requestKeys = keys.filter(key => key.startsWith('request_'));
+    
+    // Собираем информацию о пользователях
+    const users = new Map();
+    requestKeys.forEach(key => {
+      const request = cache.get(key);
+      if (request && request.userId) {
+        users.set(request.userId, {
+          username: request.username,
+          lastActivity: request.lastActivity || request.created,
+          userId: request.userId
+        });
+      }
+    });
+    
+    // Преобразуем в массив и сортируем по последней активности
+    const userList = Array.from(users.values())
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
+    
+    if (userList.length === 0) {
+      await ctx.reply('Нет активных пользователей в последнее время.');
+      return;
+    }
+    
+    // Формируем сообщение со списком пользователей
+    let message = '📃 Список всех пользователей (отсортировано по последней активности):\n\n';
+    
+    userList.forEach((user, index) => {
+      const date = new Date(user.lastActivity || Date.now()).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      message += `${index + 1}. ${user.username} (ID: ${user.userId}) - ${date}\n`;
+      message += `   ➡️ /direct ${user.userId} - открыть прямой чат\n`;
+    });
+    
+    message += '\n💬 Для отправки сообщения с помощью бота используйте команду /dm ID_ПОЛЬЗОВАТЕЛЯ ТЕКСТ';
+    
+    await ctx.reply(message);
+    
+    // Создаем кнопки для первых 5 пользователей
+    const topUsers = userList.slice(0, 5);
+    const buttons = topUsers.map(user => [
+      Markup.button.url(`💬 ${user.username}`, `tg://user?id=${user.userId}`)
+    ]);
+    
+    await ctx.reply('Быстрый доступ к последним пользователям:', Markup.inlineKeyboard(buttons));
+  } catch (error) {
+    console.error('Ошибка при получении полного списка пользователей:', error);
+    await ctx.answerCbQuery('Произошла ошибка при получении списка');
+    await ctx.reply('Произошла ошибка при получении списка пользователей.');
   }
 });
 
@@ -297,20 +442,24 @@ bot.command('direct', async (ctx) => {
     
     const targetUserId = match[1];
     
-    // Создаем ссылку и отправляем ее администратору
-    const instructions = `Чтобы начать прямой диалог с пользователем (ID: ${targetUserId}), нажмите на кнопку ниже:
-
-ℹ️ Важные примечания:
-• При нажатии на кнопку откроется чат с пользователем в Telegram (не через бота)
-• Вы будете общаться от вашего личного аккаунта Telegram
-• Сообщения в прямом чате не проходят через систему бота`;
-
-    await ctx.reply(instructions, Markup.inlineKeyboard([
-      [Markup.button.url(`💬 Написать напрямую`, `tg://user?id=${targetUserId}`)]
+    // Получаем ссылки для прямого диалога из модуля
+    const linkData = createDirectChatLink(targetUserId);
+    
+    // Отправляем расширенное сообщение с вариантами ссылок
+    await ctx.reply(linkData.instructions, Markup.inlineKeyboard([
+      [Markup.button.url(`📱 Открыть диалог с пользователем`, linkData.directLink)],
+      [Markup.button.url(`🌐 Альтернативная ссылка (web)`, linkData.alternativeLink)]
     ]));
+    
+    // Отправляем дополнительную информацию о получении сообщений
+    await ctx.reply('💡 Советы по прямому общению:\n\n' +
+    '• Представьтесь пользователю при первом контакте\n' +
+    '• Упомяните, что Вы куратор и отвечаете по вопросу из бота\n' +
+    '• Если диалог не открывается через первую кнопку, попробуйте альтернативную ссылку');
+    
   } catch (error) {
     console.error('Ошибка в обработчике команды /direct:', error);
-    await ctx.reply('Произошла ошибка при создании ссылки.');
+    await ctx.reply('Произошла ошибка при создании ссылки. Пожалуйста, повторите попытку позже.');
   }
 });
 
@@ -338,14 +487,16 @@ bot.command('users', async (ctx) => {
         users.set(request.userId, {
           username: request.username,
           lastActivity: request.lastActivity || request.created,
-          userId: request.userId
+          userId: request.userId,
+          category: request.category || 'unknown',
+          lastMessage: request.text || ''
         });
       }
     });
     
     // Преобразуем в массив и сортируем по последней активности
     const userList = Array.from(users.values())
-      .sort((a, b) => b.lastActivity - a.lastActivity)
+      .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
       .slice(0, 10); // Берем только 10 последних пользователей
     
     if (userList.length === 0) {
@@ -353,30 +504,46 @@ bot.command('users', async (ctx) => {
       return;
     }
     
-    // Формируем сообщение со списком пользователей
-    let message = '📊 Последние пользователи:\n\n';
+    // Формируем улучшенное сообщение со списком пользователей
+    let message = '📊 Последние активные пользователи:\n\n';
     userList.forEach((user, index) => {
-      const date = new Date(user.lastActivity).toLocaleString();
+      const date = new Date(user.lastActivity || Date.now()).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
       message += `${index + 1}. ${user.username} (ID: ${user.userId}) - ${date}\n`;
+      message += `   📱 /direct ${user.userId} - открыть прямой диалог\n`;
+      
+      // Добавляем краткую информацию о последнем сообщении, если оно есть
+      if (user.lastMessage) {
+        const shortMessage = user.lastMessage.length > 50 ? 
+          user.lastMessage.substring(0, 50) + '...' : 
+          user.lastMessage;
+        message += `   💬 Последний вопрос: ${shortMessage}\n`;
+      }
+      
+      message += '\n';
     });
     
-    message += '\n💬 Для отправки сообщения используйте:\n/dm ID_ПОЛЬЗОВАТЕЛЯ ТЕКСТ_СООБЩЕНИЯ\n/direct ID_ПОЛЬЗОВАТЕЛЯ - для прямого чата через Telegram';
+    message += '📲 Команды для связи с пользователями:\n' +
+               '/direct ID - открыть прямой диалог через Telegram\n' +
+               '/dm ID ТЕКСТ - отправить сообщение через бота';
     
     await ctx.reply(message);
     
-    // Создаем кнопки для прямого диалога с пользователями
-    // Максимум 5 кнопок для последних пользователей
-    const topUsers = userList.slice(0, 5);
+    // Создаем интерактивную клавиатуру для быстрого доступа
+    const buttons = [];
     
-    const buttons = topUsers.map(user => {
-      return [Markup.button.url(
-        `💬 ${user.username} (ID: ${user.userId})`, 
-        `tg://user?id=${user.userId}`
-      )];
+    // Добавляем кнопки для топ-5 пользователей
+    const topUsers = userList.slice(0, 5);
+    topUsers.forEach(user => {
+      buttons.push([
+        Markup.button.url(`📱 Открыть диалог с ${user.username}`, `tg://user?id=${user.userId}`)
+      ]);
     });
     
+    // Добавляем кнопку помощи
+    buttons.push([Markup.button.callback('❓ Помощь по командам', 'admin_commands_help')]);
+    
     await ctx.reply(
-      'Прямые ссылки на чат с последними пользователями:',
+      '⚡ Быстрый доступ к диалогам с пользователями:',
       Markup.inlineKeyboard(buttons)
     );
   } catch (error) {
@@ -626,83 +793,77 @@ bot.action(/reply_(.+)/, async (ctx) => {
     cache.set(`admin_${adminId}_state`, 'waiting_reply');
     
     await ctx.answerCbQuery();
-    await ctx.reply(`Введите ваш ответ на запрос #${requestId} от пользователя ${requestData.username}:\n\n${requestData.text}`);
+    
+    // Предлагаем два варианта: ответить через бота или напрямую
+    const userInfo = `Запрос #${requestId} от пользователя ${requestData.username}:\n\n${requestData.text}`;
+    
+    await ctx.reply(userInfo, Markup.inlineKeyboard([
+      [Markup.button.url('📱 Открыть прямой диалог', `tg://user?id=${requestData.userId}`)],
+      [Markup.button.callback('✏️ Продолжить ответ через бота', `continue_reply_${requestId}`)],
+      [Markup.button.callback('❌ Отменить ответ', `cancel_reply_${requestId}`)]
+    ]));
+    
   } catch (error) {
     console.error('Ошибка при обработке нажатия на кнопку "Ответить на запрос":', error);
     await ctx.answerCbQuery('Произошла ошибка. Пожалуйста, повторите попытку позже.');
   }
 });
 
+// Обработка нажатия на кнопку "Продолжить ответ через бота"
+bot.action(/continue_reply_(.+)/, async (ctx) => {
+  try {
+    const requestId = ctx.match[1];
+    const adminId = ctx.from.id;
+    const requestData = cache.get(`request_${requestId}`);
+    
+    if (!requestData) {
+      await ctx.answerCbQuery('Запрос не найден или устарел');
+      return;
+    }
+    
+    // Сохраняем ID администратора, который ответит на запрос
+    cache.set(`admin_${adminId}_current_request`, requestId);
+    
+    // Устанавливаем состояние "ожидание ответа от админа"
+    cache.set(`admin_${adminId}_state`, 'waiting_reply');
+    
+    await ctx.answerCbQuery();
+    await ctx.reply(`Введите ваш ответ на запрос #${requestId}. Ответ будет отправлен пользователю ${requestData.username} от имени бота.`);
+  } catch (error) {
+    console.error('Ошибка при обработке продолжения ответа:', error);
+    await ctx.answerCbQuery('Произошла ошибка. Пожалуйста, повторите попытку позже.');
+  }
+});
+
+// Обработка нажатия на кнопку "Отменить ответ"
+bot.action(/cancel_reply_(.+)/, async (ctx) => {
+  try {
+    const requestId = ctx.match[1];
+    const adminId = ctx.from.id;
+    
+    // Сбрасываем состояние администратора
+    cache.set(`admin_${adminId}_state`, null);
+    cache.set(`admin_${adminId}_current_request`, null);
+    
+    await ctx.answerCbQuery('Ответ отменен');
+    await ctx.reply('Ответ отменен. Вы можете вернуться к этому запросу позже.');
+  } catch (error) {
+    console.error('Ошибка при отмене ответа:', error);
+    await ctx.answerCbQuery('Произошла ошибка при отмене ответа');
+  }
+});
+
 // Функция для пересылки запроса администратору/куратору
 async function forwardRequestToAdmin(requestData, ctx) {
   try {
-    // Используем ID куратора из переменных окружения
-    const adminChatId = process.env.ADMIN_CHAT_ID; // ID куратора из .env
+    // Используем модульную функцию для пересылки запроса администратору
+    await forwardRequestToAdminWithDirectLink(bot, requestData, ctx, QUESTION_CATEGORIES, cache, REQUEST_STATUS);
     
-    console.log(`Отправляю запрос куратору с ID: ${adminChatId}`);
+    // Логируем успешную отправку запроса для мониторинга
+    console.log(`Запрос #${requestData.id} от пользователя ${requestData.username} успешно отправлен администратору`);
     
-    // Формируем сообщение для админа
-    let categoryText = 'Другое';
-    switch (requestData.category) {
-      case QUESTION_CATEGORIES.HOMEWORK:
-        categoryText = 'Вопрос по домашней работе';
-        break;
-      case QUESTION_CATEGORIES.APP:
-        categoryText = 'Вопрос по приложению';
-        break;
-      case QUESTION_CATEGORIES.TECHNICAL:
-        categoryText = 'Технический вопрос';
-        break;
-    }
-    
-    const adminMessage = `
-📩 Новый запрос #${requestData.id}
-
-👤 Пользователь: ${requestData.username} (ID: ${requestData.userId})
-📂 Категория: ${categoryText}
-⏱ Время: ${moment(requestData.created).format('DD.MM.YYYY HH:mm:ss')}
-
-📌 Текст запроса:
-${requestData.text}
-
-🔗 Для прямого ответа нажмите кнопку "Написать напрямую" ниже.
-💡 Или используйте команду: /direct ${requestData.userId}
-`;
-    
-    // Попытка прямой отправки сообщения куратору с улучшенным интерфейсом
-    try {
-      // Отправляем сообщение администратору с кнопками для ответа и прямого чата
-      await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
-        [Markup.button.url(`💬 Написать напрямую`, `tg://user?id=${requestData.userId}`)],
-        [Markup.button.callback(`✏️ Ответить через бота`, `reply_${requestData.id}`)],
-        [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
-      ]));
-      
-      console.log(`Сообщение успешно отправлено куратору ${adminChatId}`);
-    } catch (sendError) {
-      console.error(`Ошибка при отправке сообщения куратору:`, sendError);
-      
-      // Попробуем альтернативный формат для прямого чата (вместо tg:// ссылка https://t.me/)
-      try {
-        await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
-          [Markup.button.url(`💬 Написать напрямую`, `https://t.me/${requestData.username ? requestData.username : `?start=${requestData.userId}`}`)],
-          [Markup.button.callback(`✏️ Ответить через бота`, `reply_${requestData.id}`)],
-          [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
-        ]));
-        console.log(`Отправлено альтернативное сообщение куратору ${adminChatId}`);
-      } catch (altSendError) {
-        // Дополнительная попытка отправить простое сообщение без кнопок
-        try {
-          await bot.telegram.sendMessage(adminChatId, adminMessage);
-          console.log(`Отправлено упрощенное сообщение куратору ${adminChatId}`);
-        } catch (simpleSendError) {
-          console.error(`Не удалось отправить даже простое сообщение:`, simpleSendError);
-        }
-      }
-    }
-    
-    // Обновляем статус запроса
-    requestData.status = REQUEST_STATUS.WAITING;
+    // Сохраняем время последней активности пользователя
+    requestData.lastActivity = Date.now();
     cache.set(`request_${requestData.id}`, requestData);
     
   } catch (error) {

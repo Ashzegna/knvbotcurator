@@ -303,15 +303,16 @@ async function forwardRequestToAdmin(requestData, ctx) {
 📌 Текст запроса:
 ${requestData.text}
 
-💬 Чтобы ответить напрямую, используйте команду:
-/dm ${requestData.userId} Ваш ответ
+🔗 Для прямого ответа нажмите кнопку "Написать напрямую" ниже.
+💡 Или используйте команду: /direct ${requestData.userId}
 `;
     
-    // Попытка прямой отправки сообщения куратору
+    // Попытка прямой отправки сообщения куратору с улучшенным интерфейсом
     try {
-      // Отправляем сообщение администратору с кнопками для ответа
+      // Отправляем сообщение администратору с кнопками для ответа и прямого чата
       await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
-        [Markup.button.callback(`✏️ Ответить на запрос #${requestData.id}`, `reply_${requestData.id}`)],
+        [Markup.button.url(`💬 Написать напрямую`, `tg://user?id=${requestData.userId}`)],
+        [Markup.button.callback(`✏️ Ответить через бота`, `reply_${requestData.id}`)],
         [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
       ]));
       
@@ -319,12 +320,22 @@ ${requestData.text}
     } catch (sendError) {
       console.error(`Ошибка при отправке сообщения куратору:`, sendError);
       
-      // Дополнительная попытка отправить простое сообщение без кнопок
+      // Попробуем альтернативный формат для прямого чата (https://t.me/)
       try {
-        await bot.telegram.sendMessage(adminChatId, `Новый вопрос от пользователя ${requestData.username}: ${requestData.text}`);
-        console.log(`Отправлено упрощенное сообщение куратору ${adminChatId}`);
-      } catch (simpleSendError) {
-        console.error(`Не удалось отправить даже простое сообщение:`, simpleSendError);
+        await bot.telegram.sendMessage(adminChatId, adminMessage, Markup.inlineKeyboard([
+          [Markup.button.url(`💬 Написать напрямую`, `https://t.me/${requestData.username ? requestData.username : `?start=${requestData.userId}`}`)],
+          [Markup.button.callback(`✏️ Ответить через бота`, `reply_${requestData.id}`)],
+          [Markup.button.callback(`🔄 Изменить категорию`, `change_category_${requestData.id}`)]
+        ]));
+        console.log(`Отправлено альтернативное сообщение куратору ${adminChatId}`);
+      } catch (alternativeSendError) {
+        // Дополнительная попытка отправить простое сообщение без кнопок
+        try {
+          await bot.telegram.sendMessage(adminChatId, adminMessage);
+          console.log(`Отправлено упрощенное сообщение куратору ${adminChatId}`);
+        } catch (simpleSendError) {
+          console.error(`Не удалось отправить даже простое сообщение:`, simpleSendError);
+        }
       }
     }
     
